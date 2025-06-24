@@ -89,20 +89,20 @@ logger:
 # === Remote Control and Updates ===
 api:
   encryption:
-    key: "5YOMxWYzYTTlXZ3V9OZYf67XMf7xby+XmQnX419UDt8=" # API encryption key for secure communication
+    key: !secret key
 
 # === Wi-Fi Configuration ===
 # Setting up Wi-Fi connection details and a fallback hotspot.
 ota:
   platform: esphome
-  password: "eeb7311a1c044291a3b8a2cdb0a5d71c" # OTA update password
+  password: !secret password
 
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
   ap:
     ssid: "Irrigation Fallback Hotspot"
-    password: "saintmoor"
+    password: !secret password
 
 # === Captive Portal ===
 # For fallback access when not connected to Wi-Fi.
