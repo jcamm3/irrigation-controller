@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # Irrigation Controller 🌿
 
 **Version:** 1.2.0  
@@ -35,6 +34,4 @@ Smart multi-zone irrigation controller using ESPHome and a LilyGO T-Relay (ESP32
 1. Customize `secrets.yaml` for your Wi-Fi.
 2. Flash to LilyGO T-Relay using ESPHome.
 3. Access via local IP or fallback hotspot.
-=======
-# irrigation-controller
->>>>>>> 0b804afc8f6d1549b980483aff418679fd004671
+
