@@ -1,0 +1,658 @@
+#**************************************************************
+#  PROJECT:            Irrigation Controller
+#  DEVICE/BOARD:       LilyGO T-Relay / ESP32 (esp32dev)
+#  VERSION:            1.2.0
+#  AUTHOR:             John Camm
+#  LAST UPDATED:       2025-06-24
+#**************************************************************
+#  DESCRIPTION
+#    ESPHome-based 3-zone irrigation controller with schedule automation,
+#    rain delay, manual cycle start, and a web-based interface. Includes
+#    real-time countdown, runtime-adjustable durations, per-day schedule
+#    filtering, zone highlighting, and system monitoring.
+#
+#**************************************************************
+#  SENSOR & FEATURE SPECIFICATIONS
+#    • 3 irrigation zones with independent enable and duration
+#    • Daily schedule control (up to 3 times per day)
+#    • Template switches for day-of-week enable/disable
+#    • Rain delay options: 24h and 48h with automatic reset
+#    • Manual full-cycle trigger with zone highlighting
+#    • Countdown and status text sensors (manual/scheduled)
+#    • Status LED for system indication (inverted logic)
+#    • Internal temperature and uptime reporting
+#    • Web UI with sorting groups for clean navigation
+#
+#**************************************************************
+#  GPIO PIN ASSIGNMENTS
+#  -------------------------------------------------------------------
+#    GPIO    |   Function / Peripheral
+#  ----------|--------------------------------------------------------
+#    GPIO21  |   Pump control relay
+#    GPIO19  |   Valve 1 – Zone 1 irrigation
+#    GPIO18  |   Valve 2 – Zone 2 irrigation
+#    GPIO5   |   Valve 3 – Zone 3 irrigation
+#    GPIO25  |   Status LED (active low, inverted logic)
+#  -------------------------------------------------------------------
+#
+#**************************************************************
+#  USAGE NOTES
+#    - Ensure relays match the current and voltage requirements
+#      of your valves and pump.
+#    - GPIO25 drives an inverted LED (LOW = ON).
+#    - Time synchronization is required for scheduling (via SNTP).
+#    - If no schedules are enabled, the next event will indicate
+#      "No Active Schedules".
+#
+#**************************************************************
+#  CHANGELOG
+#    [v1.2.0] - 2025-06-24
+#      - Added manual full-cycle start switch
+#      - Added Rain Delay Status and real-time countdown sensors
+#      - Highlight next zone and duration based on upcoming schedule
+#      - Binary sensor used to detect active irrigation state
+#
+#    [v1.1.0] - 2025-06-22
+#      - Initial release with:
+#        • 3 zones with adjustable durations
+#        • Daily and time-based scheduling
+#        • Rain delay toggle logic
+#        • Organized web interface groups
+#**************************************************************
+# === ESPHome Core Configuration ===
+esphome:
+  name: "irrigation"
+  friendly_name: "irrigation"
+  comment: Irrigation Controller (lilygo t-relay)
+  on_boot:
+    priority: -100
+    then:
+      - lambda: |-
+          ESP_LOGI("setup", "Configured schedule times: S1=%02d:%02d S2=%02d:%02d S3=%02d:%02d",
+            id(irrigation_s1t).hour, id(irrigation_s1t).minute,
+            id(irrigation_s2t).hour, id(irrigation_s2t).minute,
+            id(irrigation_s3t).hour, id(irrigation_s3t).minute
+          );
+
+# === Hardware Details ===
+# Configuring the ESP32 board and its framework.
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+# === Logging Configuration ===
+# Enable logging to monitor the device's behavior.
+logger:
+#  level: WARN
+
+# === Remote Control and Updates ===
+api:
+  encryption:
+    key: "5YOMxWYzYTTlXZ3V9OZYf67XMf7xby+XmQnX419UDt8=" # API encryption key for secure communication
+
+# === Wi-Fi Configuration ===
+# Setting up Wi-Fi connection details and a fallback hotspot.
+ota:
+  platform: esphome
+  password: "eeb7311a1c044291a3b8a2cdb0a5d71c" # OTA update password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "Irrigation Fallback Hotspot"
+    password: "saintmoor"
+
+# === Captive Portal ===
+# For fallback access when not connected to Wi-Fi.
+captive_portal:
+
+# === Web Server ===
+# Local web interface for monitoring and control.
+web_server:
+  version: 3
+  auth:
+    username: saintmoor
+    password: saintmoor
+  sorting_groups:
+    - id: irrigation_status
+      name: "🌱 Irrigation Overview"
+      sorting_weight: -50
+    - id: irrigation_control
+      name: "🟢 Manual Control"
+      sorting_weight: -45
+    - id: irrigation_zones
+      name: "🚿 Zones"
+      sorting_weight: -40
+    - id: irrigation_duration
+      name: "⏱️ Run Duration"
+      sorting_weight: -35
+    - id: irrigation_times
+      name: "🕒 Schedules"
+      sorting_weight: -30
+    - id: irrigation_days
+      name: "📅 Active Days"
+      sorting_weight: -25
+    - id: config_settings
+      name: "⚙️ System Info"
+      sorting_weight: -10
+
+globals:
+  - id: irrigation_next_zone
+    type: std::string
+    restore_value: false
+    initial_value: "\"none\""
+
+# set up time and check every minute (or second) for scheduled actions
+# === Time Configuration ===
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: America/New_York
+    servers:
+     - 0.pool.ntp.org
+     - 1.pool.ntp.org
+     - 2.pool.ntp.org
+    on_time:
+      # Every 1 minute
+      - seconds: 0
+        minutes: /1
+        then:
+          - script.execute: irrigation_script1
+    on_time_sync:
+      then:
+        - logger.log: "Synchronized system clock"
+
+# === Light ====
+# Configure onboard LED as a status indicator.
+light:
+  - platform: status_led
+    name: "Status LED"
+    icon: "mdi:led-off"
+    id: onboard_led
+    restore_mode: ALWAYS_ON
+    pin:
+      number: 25
+      mode: output
+      inverted: true
+
+sprinkler:
+  - id: irrigation
+    main_switch: "🚀 Start Irrigation Cycle"
+    auto_advance_switch: "Auto Advance"
+    reverse_switch: "Reverse"
+    valve_open_delay: 5s
+    valves:
+      - valve_switch: "💧 Zone 1"
+        enable_switch: "🔁 Enable Zone 1"
+        pump_switch_id: irrigation_pump_sw
+        run_duration_number:
+          id: zone_1_run_duration
+          name: "Zone 1 Duration"
+          icon: "mdi:timer-outline"
+          initial_value: 60
+          min_value: 1
+          max_value: 240
+          unit_of_measurement: min
+          web_server:
+            sorting_group_id: irrigation_duration
+        valve_switch_id: irrigation_valve_sw1
+      - valve_switch: "💧 Zone 2"
+        enable_switch: "🔁 Enable Zone 2"
+        pump_switch_id: irrigation_pump_sw
+        run_duration_number:
+          id: zone_2_run_duration
+          name: "Zone 2 Duration"
+          icon: "mdi:timer-outline"
+          initial_value: 60
+          min_value: 1
+          max_value: 240
+          unit_of_measurement: min
+          web_server:
+            sorting_group_id: irrigation_duration
+        valve_switch_id: irrigation_valve_sw2
+      - valve_switch: "💧 Zone 3"
+        enable_switch: "🔁 Enable Zone 3"
+        pump_switch_id: irrigation_pump_sw
+        run_duration_number:
+          id: zone_3_run_duration
+          name: "Zone 3 Duration"
+          icon: "mdi:timer-outline"
+          initial_value: 60
+          min_value: 1
+          max_value: 240
+          unit_of_measurement: min
+          web_server:
+            sorting_group_id: irrigation_duration
+        valve_switch_id: irrigation_valve_sw3
+
+switch:
+  - platform: gpio
+    id: irrigation_pump_sw
+    pin: GPIO21
+    restore_mode: ALWAYS_OFF
+    name: "🟢 Pump Control"
+    icon: "mdi:water-pump"
+    web_server:
+      sorting_group_id: irrigation_control
+  - platform: gpio
+    id: irrigation_valve_sw1
+    pin: GPIO19
+    restore_mode: ALWAYS_OFF
+    name: "Zone 1 Valve"
+    icon: "mdi:sprinkler"
+    web_server:
+      sorting_group_id: irrigation_zones
+  - platform: gpio
+    id: irrigation_valve_sw2
+    pin: GPIO18
+    restore_mode: ALWAYS_OFF
+    name: "Zone 2 Valve"
+    icon: "mdi:sprinkler"
+    web_server:
+      sorting_group_id: irrigation_zones
+  - platform: gpio
+    id: irrigation_valve_sw3
+    pin: GPIO5
+    restore_mode: ALWAYS_OFF
+    name: "Zone 3 Valve"
+    icon: "mdi:sprinkler"
+    web_server:
+      sorting_group_id: irrigation_zones
+  # day of week toggle switches
+  - platform: template
+    id: irrigation_sunday
+    name: "📅 Sunday"
+    icon: "mdi:calendar-range"
+    entity_category: config
+    restore_mode: RESTORE_DEFAULT_ON
+    optimistic: true
+    web_server:
+      sorting_group_id: irrigation_days
+  - platform: template
+    id: irrigation_monday
+    name: "📅 Monday"
+    icon: "mdi:calendar-range"
+    entity_category: config
+    restore_mode: RESTORE_DEFAULT_ON
+    optimistic: true
+    web_server:
+      sorting_group_id: irrigation_days
+  - platform: template
+    id: irrigation_tuesday
+    name: "📅 Tuesday"
+    icon: "mdi:calendar-range"
+    entity_category: config
+    restore_mode: RESTORE_DEFAULT_ON
+    optimistic: true
+    web_server:
+      sorting_group_id: irrigation_days
+  - platform: template
+    id: irrigation_wednesday
+    name: "📅 Wednesday"
+    icon: "mdi:calendar-range"
+    entity_category: config
+    restore_mode: RESTORE_DEFAULT_ON
+    optimistic: true
+    web_server:
+      sorting_group_id: irrigation_days
+  - platform: template
+    id: irrigation_thursday
+    name: "📅 Thursday"
+    icon: "mdi:calendar-range"
+    entity_category: config
+    restore_mode: RESTORE_DEFAULT_ON
+    optimistic: true
+    web_server:
+      sorting_group_id: irrigation_days
+  - platform: template
+    id: irrigation_friday
+    name: "📅 Friday"
+    icon: "mdi:calendar-range"
+    entity_category: config
+    restore_mode: RESTORE_DEFAULT_ON
+    optimistic: true
+    web_server:
+      sorting_group_id: irrigation_days
+  - platform: template
+    id: irrigation_saturday
+    name: "📅 Saturday"
+    icon: "mdi:calendar-range"
+    entity_category: config
+    restore_mode: RESTORE_DEFAULT_ON
+    optimistic: true
+    web_server:
+      sorting_group_id: irrigation_days
+  # scheduled time enable switches
+  - platform: template
+    id: irrigation_schedule1_enabled
+    name: "🕒 Enable Schedule 1"
+    icon: "mdi:clock-outline"
+    entity_category: config
+    restore_mode: RESTORE_DEFAULT_ON
+    optimistic: true
+    web_server:
+      sorting_group_id: irrigation_times
+  - platform: template
+    id: irrigation_schedule2_enabled
+    name: "🕒 Enable Schedule 2"
+    icon: "mdi:clock-outline"
+    entity_category: config
+    restore_mode: RESTORE_DEFAULT_ON
+    optimistic: true
+    web_server:
+      sorting_group_id: irrigation_times
+  - platform: template
+    id: irrigation_schedule3_enabled
+    name: "🕒 Enable Schedule 3"
+    icon: "mdi:clock-outline"
+    entity_category: config
+    restore_mode: RESTORE_DEFAULT_ON
+    optimistic: true
+    web_server:
+      sorting_group_id: irrigation_times
+# === Rain Delay Controls ===
+  - platform: template
+    id: irrigation_raindelay_24h_enabled
+    name: "🌧️ Rain Delay 24h"
+    icon: "mdi:weather-cloudy-clock"
+    restore_mode: RESTORE_DEFAULT_OFF
+    optimistic: true
+    turn_on_action:
+      then:
+        - delay: { hours: 24 }
+        - switch.turn_off: irrigation_raindelay_24h_enabled
+    web_server:
+      sorting_group_id: irrigation_control
+  - platform: template
+    id: irrigation_raindelay_48h_enabled
+    name: "🌧️ Rain Delay 48h"
+    icon: "mdi:weather-cloudy-clock"
+    restore_mode: RESTORE_DEFAULT_OFF
+    optimistic: true
+    turn_on_action:
+      then:
+        - delay: { hours: 48 }
+        - switch.turn_off: irrigation_raindelay_48h_enabled
+    web_server:
+      sorting_group_id: irrigation_control
+  - platform: template
+    name: "Manual Start Full Cycle"
+    id: irrigation_manual_cycle
+    icon: "mdi:play-circle"
+    restore_mode: ALWAYS_OFF
+    turn_on_action:
+      - script.execute: irrigation_script3
+    web_server:
+      sorting_group_id: irrigation_control
+
+  - platform: restart
+    icon: mdi:reload-alert
+    name: "Restart" # Manual restart switch
+
+datetime:
+  - platform: template
+    name: "Schedule 1 Start Time"
+    entity_category: config
+    id: irrigation_s1t
+    type: time
+    optimistic: true
+    restore_value: true
+    web_server:
+      sorting_group_id: irrigation_times
+  - platform: template
+    name: "Schedule 2 Start Time"
+    entity_category: config
+    id: irrigation_s2t
+    type: time
+    optimistic: true
+    restore_value: true
+    web_server:
+      sorting_group_id: irrigation_times
+  - platform: template
+    name: "Schedule 3 Start Time"
+    entity_category: config
+    id: irrigation_s3t
+    type: time
+    optimistic: true
+    restore_value: true
+    web_server:
+      sorting_group_id: irrigation_times
+
+sensor:
+  - platform: uptime
+    name: "Uptime"
+    id: uptime_s
+    update_interval: 5s
+  - platform: internal_temperature
+    name: "Internal Temperature"
+    id: internal_temperature_f
+    unit_of_measurement: "°F"
+    icon: "mdi:temperature-fahrenheit"
+    accuracy_decimals: 0
+    device_class: temperature
+    state_class: measurement
+    filters:
+      - lambda: return x * (9.0/5.0) + 32.0;
+      - filter_out: nan
+
+binary_sensor:
+  - platform: template
+    id: irrigation_running
+    name: "Irrigation Running"
+    lambda: |-
+      return id(irrigation_pump_sw).state ||
+             id(irrigation_valve_sw1).state ||
+             id(irrigation_valve_sw2).state ||
+             id(irrigation_valve_sw3).state;
+  - platform: status
+    name: "Connection Status"
+    icon: "mdi:connection"
+    web_server:
+      sorting_group_id: config_settings
+
+text_sensor:
+  - platform: template
+    name: "Next Scheduled Event"
+    icon: "mdi:calendar-clock"
+    entity_category: diagnostic
+    lambda: |-
+      if (id(irrigation_running).state) {
+        return std::string("Manual Mode Active");
+      }
+
+      auto now = id(sntp_time).now();
+      if (!now.is_valid()) return {"Waiting for time sync..."};
+
+      std::string result = "No Active Schedules";
+      int min_minutes = 1441;
+      int target_hour = 0;
+      int target_minute = 0;
+      std::string label;
+
+      auto check_schedule = [&](bool enabled, int sched_hour, int sched_minute, const std::string& name) {
+        if (!enabled) return;
+
+        int now_total = now.hour * 60 + now.minute;
+        int sched_total = sched_hour * 60 + sched_minute;
+        int delta = sched_total >= now_total ? sched_total - now_total : 1440 - (now_total - sched_total);
+
+        if (delta < min_minutes) {
+          min_minutes = delta;
+          target_hour = sched_hour;
+          target_minute = sched_minute;
+          label = name;
+        }
+      };
+
+      check_schedule(id(irrigation_schedule1_enabled).state, id(irrigation_s1t).hour, id(irrigation_s1t).minute, "S1");
+      check_schedule(id(irrigation_schedule2_enabled).state, id(irrigation_s2t).hour, id(irrigation_s2t).minute, "S2");
+      check_schedule(id(irrigation_schedule3_enabled).state, id(irrigation_s3t).hour, id(irrigation_s3t).minute, "S3");
+
+      if (min_minutes <= 1440) {
+        char buffer[32];
+        snprintf(buffer, sizeof(buffer), "Next: %s %02d:%02d", label.c_str(), target_hour, target_minute);
+        return std::string(buffer);
+      }
+
+      return result;
+    update_interval: 30s
+    web_server:
+      sorting_group_id: irrigation_status
+  - platform: template
+    name: "Next Irrigation Countdown"
+    icon: "mdi:clock-start"
+    entity_category: diagnostic
+    lambda: |-
+      if (id(irrigation_running).state) {
+        return std::string("Manual Mode Active");
+      }
+
+      auto now = id(sntp_time).now();
+      if (!now.is_valid()) return {"Waiting for time sync..."};
+
+      int min_minutes = 1441;
+
+      auto check_schedule = [&](bool enabled, int hour, int minute) {
+        if (!enabled) return;
+        int now_total = now.hour * 60 + now.minute;
+        int sched_total = hour * 60 + minute;
+        int delta = sched_total >= now_total ? sched_total - now_total : 1440 - (now_total - sched_total);
+        if (delta < min_minutes) min_minutes = delta;
+      };
+
+      check_schedule(id(irrigation_schedule1_enabled).state, id(irrigation_s1t).hour, id(irrigation_s1t).minute);
+      check_schedule(id(irrigation_schedule2_enabled).state, id(irrigation_s2t).hour, id(irrigation_s2t).minute);
+      check_schedule(id(irrigation_schedule3_enabled).state, id(irrigation_s3t).hour, id(irrigation_s3t).minute);
+
+      if (min_minutes <= 1440) {
+        int hours = min_minutes / 60;
+        int minutes = min_minutes % 60;
+        char buffer[32];
+        snprintf(buffer, sizeof(buffer), "Next in %dh %02dm", hours, minutes);
+        return std::string(buffer);
+      }
+
+      return std::string("No Active Schedules");
+    update_interval: 30s
+    web_server:
+      sorting_group_id: irrigation_status
+
+  - platform: template
+    name: "Rain Delay Status"
+    lambda: |-
+      if (id(irrigation_raindelay_24h_enabled).state)
+        return {"24h Delay Active"};
+      else if (id(irrigation_raindelay_48h_enabled).state)
+        return {"48h Delay Active"};
+      else
+        return {"No Rain Delay"};
+    update_interval: 30s
+    icon: mdi:weather-pouring
+    web_server:
+      sorting_group_id: irrigation_status
+  - platform: template
+    name: "Uptime (formatted)"
+    icon: "mdi:timer-outline"
+    entity_category: diagnostic
+    lambda: |-
+      uint32_t dur = id(uptime_s).state;
+      uint32_t dys = dur / 86400;
+      dur %= 86400;
+      uint32_t hrs = dur / 3600;
+      dur %= 3600;
+      uint32_t mnts = dur / 60;
+      dur %= 60;
+      char buffer[32];
+      snprintf(buffer, sizeof(buffer), "%ud %02uh %02um %02us", dys, hrs, mnts, dur);
+      return {buffer};
+    update_interval: 5s
+    web_server:
+      sorting_group_id: config_settings
+  - platform: wifi_info
+    ip_address:
+      name: "IP Address"
+      icon: "mdi:ip"
+      web_server:
+        sorting_group_id: config_settings
+    ssid:
+      name: "Connected SSID"
+      icon: "mdi:wifi"
+      web_server:
+        sorting_group_id: config_settings
+
+script:
+  - id: irrigation_script1
+    then:
+      lambda: |-
+        int dow = id(sntp_time).now().day_of_week;
+        if ((dow == 1 && id(irrigation_sunday).state)
+         || (dow == 2 && id(irrigation_monday).state)
+         || (dow == 3 && id(irrigation_tuesday).state)
+         || (dow == 4 && id(irrigation_wednesday).state)
+         || (dow == 5 && id(irrigation_thursday).state)
+         || (dow == 6 && id(irrigation_friday).state)
+         || (dow == 7 && id(irrigation_saturday).state)) {
+          id(irrigation_script2).execute();
+        }
+  - id: irrigation_script2
+    then:
+      lambda: |-
+        int hour = id(sntp_time).now().hour;
+        int minute = id(sntp_time).now().minute;
+        if ((hour == id(irrigation_s1t).hour && minute == id(irrigation_s1t).minute && id(irrigation_schedule1_enabled).state && !id(irrigation_raindelay_24h_enabled).state && !id(irrigation_raindelay_48h_enabled).state)
+         || (hour == id(irrigation_s2t).hour && minute == id(irrigation_s2t).minute && id(irrigation_schedule2_enabled).state && !id(irrigation_raindelay_24h_enabled).state && !id(irrigation_raindelay_48h_enabled).state)
+         || (hour == id(irrigation_s3t).hour && minute == id(irrigation_s3t).minute && id(irrigation_schedule3_enabled).state && !id(irrigation_raindelay_24h_enabled).state && !id(irrigation_raindelay_48h_enabled).state)) {
+          id(irrigation_script3).execute();
+        }
+  - id: irrigation_script3
+    then:
+      - lambda: |-
+          if (id(irrigation_valve_sw1).state) {
+            id(irrigation_next_zone) = "zone1";
+          } else if (id(irrigation_valve_sw2).state) {
+            id(irrigation_next_zone) = "zone2";
+          } else if (id(irrigation_valve_sw3).state) {
+            id(irrigation_next_zone) = "zone3";
+          } else {
+            id(irrigation_next_zone) = "none";
+          }
+      - sprinkler.start_full_cycle: irrigation
+      - lambda: ESP_LOGI("main", "Sprinkler cycle has begun!");
+
+interval:
+  - interval: 30s
+    then:
+      - lambda: |-
+          auto now = id(sntp_time).now();
+          if (!now.is_valid()) {
+            id(irrigation_next_zone) = "none";
+            return;
+          }
+          int min_minutes = 1441;
+          std::string label = "none";
+          auto check_schedule = [&](bool enabled, int hour, int minute, const std::string& zone) {
+            if (!enabled) return;
+            int now_total = now.hour * 60 + now.minute;
+            int sched_total = hour * 60 + minute;
+            int delta = sched_total >= now_total ? sched_total - now_total : 1440 - (now_total - sched_total);
+            if (delta < min_minutes) {
+              min_minutes = delta;
+              label = zone;
+            }
+          };
+          check_schedule(id(irrigation_schedule1_enabled).state, id(irrigation_s1t).hour, id(irrigation_s1t).minute, "zone1");
+          check_schedule(id(irrigation_schedule2_enabled).state, id(irrigation_s2t).hour, id(irrigation_s2t).minute, "zone2");
+          check_schedule(id(irrigation_schedule3_enabled).state, id(irrigation_s3t).hour, id(irrigation_s3t).minute, "zone3");
+
+          id(irrigation_next_zone) = label;
+  - interval: 5s
+    then:
+      - binary_sensor.template.publish:
+          id: irrigation_running
+          state: !lambda |-
+            return id(irrigation_pump_sw).state ||
+                   id(irrigation_valve_sw1).state ||
+                   id(irrigation_valve_sw2).state ||
+                   id(irrigation_valve_sw3).state;
