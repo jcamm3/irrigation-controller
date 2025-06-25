@@ -20,6 +20,7 @@
 #    • Manual full-cycle trigger with zone highlighting and logging
 #    • Cancel Scheduled Cycle logic with per-day disable override
 #    • Countdown, active zone display, and unified irrigation status sensor
+#    • Irrigation Daily Summary sensor with health & schedule overview
 #    • Status LED for system indication (inverted logic)
 #    • Internal temperature and uptime reporting
 #    • Organized web UI with intuitive sorting groups
@@ -44,7 +45,36 @@
 #    - Time synchronization is required for scheduling (via SNTP).
 #    - If no schedules are enabled, the next event will indicate
 #      "No Active Schedules".
-#    - Scheduled cycles can be suppressed for th
+#    - Scheduled cycles can be suppressed for the day using the
+#      "Cancel Scheduled Cycle" switch.
+#
+#**************************************************************
+#  CHANGELOG
+#
+#    [1.3.0] – 2025-06-25
+#      • Added 'Irrigation Daily Summary' sensor with zone, schedule, rain delay,
+#        and system health overview.
+#      • Added connection status indicator and formatted uptime.
+#      • Improved next scheduled event detection and script logging.
+#      • Fixed scheduled cycle suppression reset at midnight.
+#
+#    [1.2.0] – 2025-06-24
+#      • Implemented "Cancel Scheduled Cycle" logic using daily disable flag.
+#      • Refactored scripts to separate manual and scheduled irrigation handling.
+#      • Enhanced web UI grouping and added sorting weights.
+#      • Added runtime tracking for manual vs scheduled modes.
+#
+#    [1.1.0] – 2025-06-22
+#      • Added individual enable switches for each schedule slot (S1–S3).
+#      • Introduced "Rain Delay" template switches with auto-reset after 24h/48h.
+#      • Added diagnostics: Next event time, countdown, active zone display.
+#      • Improved clarity and consistency of switch names and icons.
+#
+#    [1.0.0] – 2025-06-20
+#      • Initial version with 3 zones, time-based scheduling, and manual cycle support.
+#      • Implemented pump/valve control via GPIOs with status tracking.
+#      • Basic web server interface and OTA update support.
+#
 #**************************************************************
 # === ESPHome Core Configuration ===
 esphome:
@@ -480,11 +510,98 @@ binary_sensor:
              id(irrigation_valve_sw3).state;
   - platform: status
     name: "Connection Status"
+    id: connection_status
     icon: "mdi:connection"
     web_server:
       sorting_group_id: config_settings
 
 text_sensor:
+  - platform: template
+    name: "Irrigation Daily Summary"
+    id: irrigation_daily_summary
+    icon: "mdi:calendar-today"
+    lambda: |-
+      auto now = id(sntp_time).now();
+      if (!now.is_valid()) return {"Waiting for time sync..."};
+
+      int dow = now.day_of_week;
+      bool zone_enabled_today = false;
+
+      switch (dow) {
+        case 0: zone_enabled_today = id(irrigation_sunday).state; break;
+        case 1: zone_enabled_today = id(irrigation_monday).state; break;
+        case 2: zone_enabled_today = id(irrigation_tuesday).state; break;
+        case 3: zone_enabled_today = id(irrigation_wednesday).state; break;
+        case 4: zone_enabled_today = id(irrigation_thursday).state; break;
+        case 5: zone_enabled_today = id(irrigation_friday).state; break;
+        case 6: zone_enabled_today = id(irrigation_saturday).state; break;
+      }
+
+      bool rain24 = id(irrigation_raindelay_24h_enabled).state;
+      bool rain48 = id(irrigation_raindelay_48h_enabled).state;
+      bool rain = rain24 || rain48;
+
+      std::string result = "Today: ";
+      result += (zone_enabled_today ? "✅" : "❌");
+      result += " Zone 1, ";
+      result += (zone_enabled_today ? "✅" : "❌");
+      result += " Zone 2, ";
+      result += (zone_enabled_today ? "✅" : "❌");
+      result += " Zone 3\n";
+
+      result += (rain ? "Rain Delay Active: ☔" : "No Rain Delay");
+      result += "\n";
+
+      if (id(irrigation_running).state) {
+        result += "Now: Manual Cycle Running\n";
+      } else {
+        int min_delta = 1441;
+        int next_hour = -1;
+        int next_minute = -1;
+        std::string next_label = "—";
+
+        auto now_total = now.hour * 60 + now.minute;
+
+        auto check_schedule = [&](bool enabled, int hour, int minute, const std::string& label) {
+          if (!enabled || rain) return;
+          int sched_total = hour * 60 + minute;
+          int delta = sched_total >= now_total ? sched_total - now_total : 1440 - (now_total - sched_total);
+          if (delta < min_delta) {
+            min_delta = delta;
+            next_hour = hour;
+            next_minute = minute;
+            next_label = label;
+          }
+        };
+
+        check_schedule(id(irrigation_schedule1_enabled).state, id(irrigation_s1t).hour, id(irrigation_s1t).minute, "Zone 1");
+        check_schedule(id(irrigation_schedule2_enabled).state, id(irrigation_s2t).hour, id(irrigation_s2t).minute, "Zone 2");
+        check_schedule(id(irrigation_schedule3_enabled).state, id(irrigation_s3t).hour, id(irrigation_s3t).minute, "Zone 3");
+
+        if (next_label != "—") {
+          char buffer[64];
+          snprintf(buffer, sizeof(buffer), "Next: %s at %02d:%02d", next_label.c_str(), next_hour, next_minute);
+          result += buffer;
+        } else {
+          result += "Next: No Active Schedules";
+        }
+        result += "\n";
+      }
+
+      // Append system health
+      bool online = id(connection_status).state;
+      uint32_t seconds = (uint32_t)id(uptime_s).state;
+      uint32_t hrs = seconds / 3600;
+      std::string health = online ? "🟢 Online" : "🔴 Offline";
+      char uptime_buf[32];
+      snprintf(uptime_buf, sizeof(uptime_buf), " | Uptime: %uh", hrs);
+
+      result += "Health: " + health + std::string(uptime_buf);
+
+      return result;
+    update_interval: 30s
+    web_server:
+      sorting_group_id: irrigation_status
   - platform: template
     name: "Next Scheduled Event"
     icon: "mdi:calendar-clock"
