@@ -690,7 +690,7 @@ text_sensor:
         return std::string(buffer);
       }
       return result;
-    update_interval: 30s
+    update_interval: 1s
     web_server:
       sorting_group_id: irrigation_status
   - platform: template
@@ -722,7 +722,7 @@ text_sensor:
         return std::string(buffer);
       }
       return std::string("No Active Schedules");
-    update_interval: 30s
+    update_interval: 1s
     web_server:
       sorting_group_id: irrigation_status
   - platform: template
