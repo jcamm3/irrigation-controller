@@ -168,6 +168,18 @@ globals:
     type: bool
     restore_value: false
     initial_value: "false"
+  - id: active_zone_time_remaining
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: scheduled_irrigation_active
+    type: bool
+    restore_value: false
+    initial_value: "false"
+  - id: irrigation_paused
+    type: bool
+    restore_value: false
+    initial_value: "false"
 
 # set up time and check every minute (or second) for scheduled actions
 # === Time Configuration ===
@@ -410,16 +422,18 @@ switch:
     web_server:
       sorting_group_id: irrigation_control
   - platform: template
-    name: "Manual Start Full Cycle"
+    name: "Manual Cycle Start"
     id: irrigation_manual_cycle
     icon: "mdi:play-circle"
     restore_mode: ALWAYS_OFF
     turn_on_action:
-      - script.execute: irrigation_script3
+    - lambda: |-
+        id(manual_irrigation_active) = true;
+    - script.execute: irrigation_script3
     web_server:
       sorting_group_id: irrigation_control
   - platform: template
-    name: "Cancel Manual Cycle"
+    name: "Manual Cycle Cancel"
     id: manual_irrigation_cancel
     icon: "mdi:cancel"
     restore_mode: ALWAYS_OFF
@@ -446,6 +460,33 @@ switch:
       - switch.turn_off: irrigation_valve_sw2
       - switch.turn_off: irrigation_valve_sw3
       - switch.turn_off: irrigation_pump_sw
+  - platform: template
+    name: "Pause Irrigation"
+    id: pause_irrigation
+    icon: "mdi:pause-circle"
+    restore_mode: ALWAYS_OFF
+    turn_on_action:
+      - lambda: |-
+          id(irrigation_paused) = true;
+          ESP_LOGI("irrigation", "Irrigation paused.");
+      - switch.turn_off: irrigation_valve_sw1
+      - switch.turn_off: irrigation_valve_sw2
+      - switch.turn_off: irrigation_valve_sw3
+      - switch.turn_off: irrigation_pump_sw
+    web_server:
+      sorting_group_id: irrigation_control
+  - platform: template
+    name: "Resume Irrigation"
+    id: resume_irrigation
+    icon: "mdi:play-circle"
+    restore_mode: ALWAYS_OFF
+    turn_on_action:
+      - lambda: |-
+          id(irrigation_paused) = false;
+          ESP_LOGI("irrigation", "Irrigation resumed.");
+      - script.execute: resume_irrigation_logic
+    web_server:
+      sorting_group_id: irrigation_control
   - platform: restart
     icon: mdi:reload-alert
     name: "Restart" # Manual restart switch
@@ -498,7 +539,18 @@ sensor:
     filters:
       - lambda: return x * (9.0/5.0) + 32.0;
       - filter_out: nan
-
+  - platform: template
+    name: "Active Zone Time Remaining"
+    id: active_zone_time_remaining_sensor
+    unit_of_measurement: "s"
+    accuracy_decimals: 0
+    update_interval: 1s
+    internal: true
+    lambda: |-
+      return id(active_zone_time_remaining);
+    icon: "mdi:clock-outline"
+    web_server:
+      sorting_group_id: irrigation_status
 binary_sensor:
   - platform: template
     id: irrigation_running
@@ -706,17 +758,35 @@ text_sensor:
     web_server:
       sorting_group_id: irrigation_status
   - platform: template
-    name: "Irrigation Status"
+    name: "Active Zone Time Remaining"
+    id: active_zone_time_remaining_text
+    icon: "mdi:clock-digital"
     lambda: |-
-      if (id(manual_irrigation_active)) {
-        return std::string("Manual Cycle Running");
-      } else if (id(irrigation_running).state) {
-        return std::string("Scheduled Cycle Running");
+      int total = id(active_zone_time_remaining);
+      if (total <= 0) return std::string("00:00");
+      int min = total / 60;
+      int sec = total % 60;
+      char buffer[8];
+      snprintf(buffer, sizeof(buffer), "%02d:%02d", min, sec);
+      return std::string(buffer);
+    update_interval: 1s
+    web_server:
+      sorting_group_id: irrigation_status
+  - platform: template
+    name: "Irrigation Status"
+    id: irrigation_mode
+    icon: "mdi:water-pump"
+    lambda: |-
+      if (id(irrigation_paused)) {
+        return std::string("Paused");
+      } else if (id(manual_irrigation_active)) {
+        return std::string("Manual");
+      } else if (id(scheduled_irrigation_active)) {
+        return std::string("Scheduled");
       } else {
         return std::string("Idle");
       }
-    update_interval: 5s
-    icon: mdi:water-pump
+    update_interval: 1s
     web_server:
       sorting_group_id: irrigation_status
   - platform: template
@@ -781,46 +851,80 @@ script:
   - id: irrigation_script3
     then:
       - lambda: |-
-          id(manual_irrigation_active) = true;
-          ESP_LOGI("manual", "Starting manual full-cycle");
+          if (!id(manual_irrigation_active)) {
+            id(scheduled_irrigation_active) = true;
+            id(manual_irrigation_active) = false;
+            ESP_LOGI("schedule", "Starting scheduled full-cycle");
+          } else {
+            id(scheduled_irrigation_active) = false;
+            ESP_LOGI("manual", "Starting manual full-cycle");
+          }
       - switch.turn_on: irrigation_pump_sw
       - script.execute: manual_zone1
+  - id: resume_irrigation_logic
+    then:
+      - lambda: |-
+          if (!id(manual_irrigation_active) && !id(scheduled_irrigation_active)) return;
+          if (id(irrigation_valve_sw1).state || id(irrigation_valve_sw2).state || id(irrigation_valve_sw3).state) {
+            ESP_LOGI("resume", "Resuming irrigation at current zone");
+          } else {
+            // Reopen the appropriate valve
+            if (id(irrigation_next_zone) == "zone1") {
+              id(active_zone_time_remaining) = id(zone_1_run_duration).state * 60;
+              id(irrigation_valve_sw1).turn_on();
+            } else if (id(irrigation_next_zone) == "zone2") {
+              id(active_zone_time_remaining) = id(zone_2_run_duration).state * 60;
+              id(irrigation_valve_sw2).turn_on();
+            } else if (id(irrigation_next_zone) == "zone3") {
+              id(active_zone_time_remaining) = id(zone_3_run_duration).state * 60;
+              id(irrigation_valve_sw3).turn_on();
+            }
+          }
+      - switch.turn_on: irrigation_pump_sw
   - id: manual_zone1
     then:
       - lambda: |-
-          if (!id(manual_irrigation_active)) return;
-          ESP_LOGI("manual", "Starting Zone 1");
+          if (!id(manual_irrigation_active) && !id(scheduled_irrigation_active)) return;
+          ESP_LOGI("irrigation", "Starting Zone 1");
+          id(active_zone_time_remaining) = id(zone_1_run_duration).state * 60;
+          ESP_LOGI("countdown", "Zone 1 runtime = %d minutes (%d seconds)", (int)id(zone_1_run_duration).state, id(active_zone_time_remaining));
       - switch.turn_on: irrigation_valve_sw1
       - delay: !lambda "return (uint32_t)(id(zone_1_run_duration).state * 60000);"
       - switch.turn_off: irrigation_valve_sw1
       - lambda: |-
-          if (!id(manual_irrigation_active)) return;
+          ESP_LOGI("irrigation", "Irrigation cycle complete.");
       - script.execute: manual_zone2
 
   - id: manual_zone2
     then:
       - lambda: |-
-          if (!id(manual_irrigation_active)) return;
-          ESP_LOGI("manual", "Starting Zone 2");
+          if (!id(manual_irrigation_active) && !id(scheduled_irrigation_active)) return;
+          ESP_LOGI("irrigation", "Starting Zone 2");
+          id(active_zone_time_remaining) = id(zone_2_run_duration).state * 60;
+          ESP_LOGI("countdown", "Zone 2 runtime = %d minutes (%d seconds)", (int)id(zone_2_run_duration).state, id(active_zone_time_remaining));
       - switch.turn_on: irrigation_valve_sw2
       - delay: !lambda "return (uint32_t)(id(zone_2_run_duration).state * 60000);"
       - switch.turn_off: irrigation_valve_sw2
       - lambda: |-
-          if (!id(manual_irrigation_active)) return;
+          ESP_LOGI("irrigation", "Irrigation cycle complete.");
       - script.execute: manual_zone3
 
   - id: manual_zone3
     then:
       - lambda: |-
-          if (!id(manual_irrigation_active)) return;
-          ESP_LOGI("manual", "Starting Zone 3");
+          if (!id(manual_irrigation_active) && !id(scheduled_irrigation_active)) return;
+          ESP_LOGI("irrigation", "Starting Zone 3");
+          id(active_zone_time_remaining) = id(zone_3_run_duration).state * 60;
+          ESP_LOGI("countdown", "Zone 3 runtime = %d minutes (%d seconds)", (int)id(zone_3_run_duration).state, id(active_zone_time_remaining));
       - switch.turn_on: irrigation_valve_sw3
       - delay: !lambda "return (uint32_t)(id(zone_3_run_duration).state * 60000);"
       - switch.turn_off: irrigation_valve_sw3
       - switch.turn_off: irrigation_pump_sw
       - lambda: |-
+          id(active_zone_time_remaining) = 0;
           id(manual_irrigation_active) = false;
-          ESP_LOGI("manual", "Manual irrigation complete.");
+          id(scheduled_irrigation_active) = false;
+          ESP_LOGI("irrigation", "Irrigation cycle complete.");
 
 interval:
   - interval: 30s
@@ -857,3 +961,11 @@ interval:
                    id(irrigation_valve_sw1).state ||
                    id(irrigation_valve_sw2).state ||
                    id(irrigation_valve_sw3).state;
+  - interval: 1s
+    then:
+      - if:
+          condition:
+            lambda: 'return id(active_zone_time_remaining) > 0 && !id(irrigation_paused);'
+          then:
+            - lambda: 'id(active_zone_time_remaining)--;'
+

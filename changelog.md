@@ -1,43 +1,26 @@
-# Changelog – Irrigation Controller
+# Changelog
 
-All notable changes to this project are documented in this file.
+All notable changes to this project will be documented in this file.
 
----
-
-## [1.3.0] – 2025-06-25
+## [1.3.0] - 2025-06-25
 ### Added
-- `Irrigation Daily Summary` sensor with zone enable state, rain delay status, next event, and health overview.
-- Connection status indicator and formatted uptime.
-### Improved
-- Schedule detection logic for "next scheduled event" and daily summary.
-- Logging during manual and scheduled irrigation cycles.
+- Combined `irrigation_mode` text sensor
+- `Pause/Resume` feature for irrigation cycle
+- Daily summary sensor with next start and system health
+
 ### Fixed
-- Daily reset of scheduled cycle cancellation flag at midnight.
+- Countdown and status sensors update reliably for all zones
+- `Cancel Scheduled Cycle` stops and prevents same-day repeats
 
----
-
-## [1.2.0] – 2025-06-24
+## [1.2.0] - 2025-06-24
 ### Added
-- `Cancel Scheduled Cycle` switch and associated flag logic.
-- Global flag `scheduled_irrigation_disabled_today` for per-day skip handling.
-### Improved
-- UI grouping with sorting weights for zones, durations, and settings.
-- Script structure for handling manual vs. scheduled cycles.
+- Manual Cycle Start and Cancel
+- Rain Delay (24h, 48h) with reset
+- Web UI sorting groups with emoji headers
+- Runtime-adjustable zone durations
 
----
-
-## [1.1.0] – 2025-06-22
-### Added
-- Enable switches for each schedule time (S1–S3).
-- Rain delay switches with 24h/48h auto-reset.
-- Sensors for countdown, next event, and current zone.
-### Improved
-- Icon consistency and entity naming.
-
----
-
-## [1.0.0] – 2025-06-20
+## [1.0.0] - 2025-06-22
 ### Initial Release
-- 3-zone irrigation system with daily scheduling.
-- Manual cycle trigger, runtime duration control, and pump/valve switching.
-- Web interface with OTA and Wi-Fi configuration.
+- 3-zone control with daily scheduling
+- Per-day enable switches
+- Web UI, sensor reporting

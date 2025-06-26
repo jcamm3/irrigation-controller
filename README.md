@@ -1,62 +1,45 @@
 # Irrigation Controller
 
-A fully customizable 3-zone ESPHome-based irrigation controller designed for the LilyGO T-Relay board (ESP32). Supports daily schedule automation, rain delay features, manual cycle control, and real-time status updates via web interface or Home Assistant.
+ESPHome-based 3-zone irrigation controller with schedule automation, rain delay, manual cycle control, and a local web UI for configuration and monitoring. Designed for the LilyGO T-Relay ESP32 board.
 
-## 🔧 Features
+## 🌿 Features
 
-- 🕒 **Scheduled Irrigation**
-  - Up to 3 start times per day
-  - Per-day enable/disable switches
-  - Runtime-adjustable durations per zone
+- 🚿 **3 Independent Zones** with runtime-adjustable durations
+- 📅 **Daily Scheduling** with up to 3 start times per day
+- ✅ **Per-Day Enable Switches**
+- 🌧️ **Rain Delay** options (24h / 48h) with auto-reset
+- 🔘 **Manual Cycle Trigger**
+- ⏱️ **Real-Time Countdown** for active zone
+- 🔄 **Dynamic UI Status** including active zone highlighting and time remaining
+- 📋 **Irrigation Summary** text sensor
+- 🌐 **Web Interface** with grouped sections and icons
+- ⚙️ **System Monitoring:** temperature, uptime, state
+- 🔁 **Cancel and Pause/Resume Cycle** controls
 
-- 🌧️ **Rain Delay**
-  - 24h and 48h rain delay options with automatic reset
+## 🧠 Hardware
 
-- 🛠️ **Manual Control**
-  - Trigger full-cycle irrigation manually
-  - Cancel manual or scheduled cycles mid-run
+- **Board**: LilyGO T-Relay (ESP32)
+- **Power**: 5V DC
+- **Relays**: 3 onboard (Zone 1–3)
 
-- 🖥️ **Web Interface**
-  - Built-in ESPHome web server with organized UI sorting groups
-  - Password-protected access with grouped controls
+## 🚀 Getting Started
 
-- 📊 **Status & Monitoring**
-  - Active zone indicator and irrigation mode sensor
-  - Formatted uptime, system health, and connection status
-  - “Irrigation Daily Summary” sensor with next schedule and current state
+1. Flash the board using ESPHome CLI:
+   ```bash
+   esphome run irrigation-controller.yaml
+   ```
+2. Connect to Wi-Fi and open the web UI.
+3. Configure zone durations, schedule times, and enable days.
 
-## 📦 Hardware
+## 📦 Files
 
-- **Board:** LilyGO T-Relay (ESP32, esp32dev)
-- **Relays:** Controls 3 irrigation valves and 1 pump
-- **LED:** Status indicator (inverted GPIO)
-- **Power:** 5V via barrel jack or micro-USB
+- `irrigation-controller.yaml` – Main configuration
+- `CHANGELOG.md` – Version history
+- `.gitignore` – Ignore generated files
 
-## 📐 GPIO Assignments
+## 📜 License
 
-| GPIO   | Function               |
-|--------|------------------------|
-| GPIO21 | Pump Relay             |
-| GPIO19 | Valve 1 – Zone 1       |
-| GPIO18 | Valve 2 – Zone 2       |
-| GPIO5  | Valve 3 – Zone 3       |
-| GPIO25 | Status LED (inverted)  |
-
-## 📝 Getting Started
-
-1. Flash the ESPHome YAML to the LilyGO T-Relay board
-2. Connect to Wi-Fi (fallback AP mode: `Irrigation Fallback Hotspot` / `saintmoor`)
-3. Access the web interface or integrate with Home Assistant
-4. Configure start times, durations, and enable switches
-
-## 📄 Documentation
-
-- [CHANGELOG.md](CHANGELOG.md) – version history and feature additions
-
-## 🧑‍💻 Author
-
-John Camm
+MIT License
 
 ---
-
-> Built with [ESPHome](https://esphome.io/) and designed for reliable zone irrigation control.
+Maintained by **John Camm**
