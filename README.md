@@ -1,6 +1,6 @@
 # Irrigation Controller
 
-ESPHome-based 3-zone irrigation controller with schedule automation, rain delay, manual cycle control, and a local web UI for configuration and monitoring. Designed for the LilyGO T-Relay ESP32 board.
+ESPHome-based 3-zone irrigation controller with schedule automation, rain delay, manual cycle control, and a local web UI for configuration and monitoring.
 
 ## 🌿 Features
 
