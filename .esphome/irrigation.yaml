@@ -551,6 +551,7 @@ sensor:
     icon: "mdi:clock-outline"
     web_server:
       sorting_group_id: irrigation_status
+
 binary_sensor:
   - platform: template
     id: irrigation_running
@@ -564,8 +565,6 @@ binary_sensor:
     name: "Connection Status"
     id: connection_status
     icon: "mdi:connection"
-    web_server:
-      sorting_group_id: config_settings
 
 text_sensor:
   - platform: template
@@ -805,19 +804,13 @@ text_sensor:
       snprintf(buffer, sizeof(buffer), "%ud %02uh %02um %02us", dys, hrs, mnts, dur);
       return {buffer};
     update_interval: 5s
-    web_server:
-      sorting_group_id: config_settings
   - platform: wifi_info
     ip_address:
       name: "IP Address"
       icon: "mdi:ip"
-      web_server:
-        sorting_group_id: config_settings
     ssid:
       name: "Connected SSID"
       icon: "mdi:wifi"
-      web_server:
-        sorting_group_id: config_settings
 
 script:
   - id: irrigation_script1
