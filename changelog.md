@@ -1,26 +1,28 @@
-# Changelog
+# Changelog – Irrigation Controller
 
-All notable changes to this project will be documented in this file.
-
-## [1.3.0] - 2025-06-25
+## [1.4.2] – 2025-07-24
 ### Added
-- Combined `irrigation_mode` text sensor
-- `Pause/Resume` feature for irrigation cycle
-- Daily summary sensor with next start and system health
+- Seasonal Adjustment (`input_number.seasonal_adjustment_percent`) to scale zone run durations
+- Manual Rain Delay override (`input_boolean.rain_delay_manual`)
+- Automated Rain Delay integration using OpenWeatherMap forecast
+  - Forecast rain total and start time sensors
+  - Binary sensor to determine "Will it Rain Today?"
+- Integration with existing schedule logic to skip irrigation on rainy days
 
+### Improved
+- Internal logic to check both manual and automated rain delay before running any scheduled irrigation
+- Enhanced debug logging at boot for configured schedule and lifetime water usage sync
+
+---
+
+## [1.4.1] – 2025-07-20
 ### Fixed
-- Countdown and status sensors update reliably for all zones
-- `Cancel Scheduled Cycle` stops and prevents same-day repeats
+- Corrected `pulse_meter` logic for total and daily water usage tracking
+- Daily reset of water usage and `daily_gallons_used` calculation
 
-## [1.2.0] - 2025-06-24
 ### Added
-- Manual Cycle Start and Cancel
-- Rain Delay (24h, 48h) with reset
-- Web UI sorting groups with emoji headers
-- Runtime-adjustable zone durations
-
-## [1.0.0] - 2025-06-22
-### Initial Release
-- 3-zone control with daily scheduling
-- Per-day enable switches
-- Web UI, sensor reporting
+- `irrigation_mode` text sensor to reflect current system state
+- Manual cycle pause/resume functionality
+- `active_zone_time_remaining` countdown (numeric + text)
+- Reset button for today's water usage
+- Enhanced `irrigation_daily_summary` to include water data and pause state

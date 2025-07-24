@@ -1,55 +1,29 @@
 #**************************************************************
 #  PROJECT:            Irrigation Controller
 #  DEVICE/BOARD:       LilyGO T-Relay / ESP32 (esp32dev)
-#  VERSION:            1.3.0
+#  VERSION:            1.4.1
 #  AUTHOR:             John Camm
-#  LAST UPDATED:       2025-06-25
+#  LAST UPDATED:       2025-07-21
 #**************************************************************
 #  DESCRIPTION
 #    ESPHome-based 3-zone irrigation controller with schedule automation,
 #    rain delay, manual cycle start, and a web-based interface. Includes
 #    real-time countdown, runtime-adjustable durations, per-day schedule
-#    filtering, zone highlighting, and system monitoring.
-#
-#**************************************************************
-#  SENSOR & FEATURE SPECIFICATIONS
-#    • 3 irrigation zones with independent enable and duration
-#    • Daily schedule control (up to 3 times per day)
-#    • Template switches for day-of-week enable/disable
-#    • Rain delay options: 24h and 48h with automatic reset
-#    • Manual full-cycle trigger with zone highlighting and logging
-#    • Cancel Scheduled Cycle logic with per-day disable override
-#    • Countdown, active zone display, and unified irrigation status sensor
-#    • Irrigation Daily Summary sensor with health & schedule overview
-#    • Status LED for system indication (inverted logic)
-#    • Internal temperature and uptime reporting
-#    • Organized web UI with intuitive sorting groups
-#
-#**************************************************************
-#  GPIO PIN ASSIGNMENTS
-#  -------------------------------------------------------------------
-#    GPIO    |   Function / Peripheral
-#  ----------|--------------------------------------------------------
-#    GPIO21  |   Pump control relay
-#    GPIO19  |   Valve 1 – Zone 1 irrigation
-#    GPIO18  |   Valve 2 – Zone 2 irrigation
-#    GPIO5   |   Valve 3 – Zone 3 irrigation
-#    GPIO25  |   Status LED (active low, inverted logic)
-#  -------------------------------------------------------------------
-#
-#**************************************************************
-#  USAGE NOTES
-#    - Ensure relays match the current and voltage requirements
-#      of your valves and pump.
-#    - GPIO25 drives an inverted LED (LOW = ON).
-#    - Time synchronization is required for scheduling (via SNTP).
-#    - If no schedules are enabled, the next event will indicate
-#      "No Active Schedules".
-#    - Scheduled cycles can be suppressed for the day using the
-#      "Cancel Scheduled Cycle" switch.
+#    filtering, zone highlighting, system monitoring, and water flow tracking.
 #
 #**************************************************************
 #  CHANGELOG
+#
+#    [1.4.1] – 2025-07-21
+#      • Fixed logic bug in `on_boot:` to correctly sync total_gallons_used
+#      • Added button to reset today's water usage (`reset_daily_usage`)
+#      • Minor web UI refinements and log messages
+#
+#    [1.4.0] – 2025-07-17
+#      • Integrated pulse-based flow sensor on GPIO3
+#      • Added real-time flow rate, daily and total water tracking
+#      • Appended daily/total gallons to 'Irrigation Daily Summary'
+#      • Added Home Assistant graphing sensors with state_class support
 #
 #    [1.3.0] – 2025-06-25
 #      • Added 'Irrigation Daily Summary' sensor with zone, schedule, rain delay,
@@ -57,26 +31,12 @@
 #      • Added connection status indicator and formatted uptime.
 #      • Improved next scheduled event detection and script logging.
 #      • Fixed scheduled cycle suppression reset at midnight.
-#
-#    [1.2.0] – 2025-06-24
-#      • Implemented "Cancel Scheduled Cycle" logic using daily disable flag.
-#      • Refactored scripts to separate manual and scheduled irrigation handling.
-#      • Enhanced web UI grouping and added sorting weights.
-#      • Added runtime tracking for manual vs scheduled modes.
-#
-#    [1.1.0] – 2025-06-22
-#      • Added individual enable switches for each schedule slot (S1–S3).
-#      • Introduced "Rain Delay" template switches with auto-reset after 24h/48h.
-#      • Added diagnostics: Next event time, countdown, active zone display.
-#      • Improved clarity and consistency of switch names and icons.
-#
-#    [1.0.0] – 2025-06-20
-#      • Initial version with 3 zones, time-based scheduling, and manual cycle support.
-#      • Implemented pump/valve control via GPIOs with status tracking.
-#      • Basic web server interface and OTA update support.
-#
 #**************************************************************
 # === ESPHome Core Configuration ===
+substitutions:
+  sensor_sen0550_multiplier: "0.1056688"
+  sensor_sen0217_multiplier: "2.113376"
+
 esphome:
   name: "irrigation"
   friendly_name: "irrigation"
@@ -90,6 +50,8 @@ esphome:
             id(irrigation_s2t).hour, id(irrigation_s2t).minute,
             id(irrigation_s3t).hour, id(irrigation_s3t).minute
           );
+          id(total_gallons_used) = id(water_total_gallons).state;
+          ESP_LOGI("boot", "Synced lifetime water usage baseline: %.2f gal", id(total_gallons_used));
 
 # === Hardware Details ===
 # Configuring the ESP32 board and its framework.
@@ -101,7 +63,7 @@ esp32:
 # === Logging Configuration ===
 # Enable logging to monitor the device's behavior.
 logger:
-#  level: WARN
+  level: WARN
 
 # === Remote Control and Updates ===
 api:
@@ -111,8 +73,9 @@ api:
 # === Wi-Fi Configuration ===
 # Setting up Wi-Fi connection details and a fallback hotspot.
 ota:
-  platform: esphome
-  password: "eeb7311a1c044291a3b8a2cdb0a5d71c" # OTA update password
+  - platform: esphome  # Your existing OTA method
+    password: "eeb7311a1c044291a3b8a2cdb0a5d71c" # OTA update password
+#  - platform: web_server  # Add this for web-based OTA uploads
 
 wifi:
   ssid: !secret wifi_ssid
@@ -135,9 +98,12 @@ web_server:
   sorting_groups:
     - id: irrigation_status
       name: "🌱 Irrigation Overview"
+      sorting_weight: -55
+    - id: irrigation_usage
+      name: "💧 Water Usage"
       sorting_weight: -50
     - id: irrigation_control
-      name: "🟢 Manual Control"
+      name: "🟢 Manual Controls"
       sorting_weight: -45
     - id: irrigation_zones
       name: "🚿 Zones"
@@ -180,6 +146,14 @@ globals:
     type: bool
     restore_value: false
     initial_value: "false"
+  - id: total_gallons_used
+    type: float
+    restore_value: true
+    initial_value: "0.0"
+  - id: daily_gallons_used
+    type: float
+    restore_value: true
+    initial_value: "0.0"
 
 # set up time and check every minute (or second) for scheduled actions
 # === Time Configuration ===
@@ -192,11 +166,6 @@ time:
      - 1.pool.ntp.org
      - 2.pool.ntp.org
     on_time:
-      # Every 1 minute
-      - seconds: 0
-        minutes: /1
-        then:
-          - script.execute: irrigation_script1
       - seconds: 0
         minutes: 0
         hours: 0
@@ -207,6 +176,16 @@ time:
     on_time_sync:
       then:
         - logger.log: "Synchronized system clock"
+  - platform: homeassistant
+    id: time_reset
+    on_time:
+      - seconds: 0
+        minutes: 0
+        hours: 0
+        then:
+          - lambda: |-
+              id(daily_gallons_used) = 0.0;
+          - component.update: water_today_gallons
 
 # === Light ====
 # Configure onboard LED as a status indicator.
@@ -230,6 +209,7 @@ sprinkler:
     valves:
       - valve_switch: "💧 Zone 1"
         enable_switch: "🔁 Enable Zone 1"
+        valve_switch_id: irrigation_valve_sw1
         pump_switch_id: irrigation_pump_sw
         run_duration_number:
           id: zone_1_run_duration
@@ -241,9 +221,9 @@ sprinkler:
           unit_of_measurement: min
           web_server:
             sorting_group_id: irrigation_duration
-        valve_switch_id: irrigation_valve_sw1
       - valve_switch: "💧 Zone 2"
         enable_switch: "🔁 Enable Zone 2"
+        valve_switch_id: irrigation_valve_sw2
         pump_switch_id: irrigation_pump_sw
         run_duration_number:
           id: zone_2_run_duration
@@ -255,9 +235,9 @@ sprinkler:
           unit_of_measurement: min
           web_server:
             sorting_group_id: irrigation_duration
-        valve_switch_id: irrigation_valve_sw2
       - valve_switch: "💧 Zone 3"
         enable_switch: "🔁 Enable Zone 3"
+        valve_switch_id: irrigation_valve_sw3
         pump_switch_id: irrigation_pump_sw
         run_duration_number:
           id: zone_3_run_duration
@@ -269,7 +249,6 @@ sprinkler:
           unit_of_measurement: min
           web_server:
             sorting_group_id: irrigation_duration
-        valve_switch_id: irrigation_valve_sw3
 
 switch:
   - platform: gpio
@@ -422,32 +401,6 @@ switch:
     web_server:
       sorting_group_id: irrigation_control
   - platform: template
-    name: "Manual Cycle Start"
-    id: irrigation_manual_cycle
-    icon: "mdi:play-circle"
-    restore_mode: ALWAYS_OFF
-    turn_on_action:
-    - lambda: |-
-        id(manual_irrigation_active) = true;
-    - script.execute: irrigation_script3
-    web_server:
-      sorting_group_id: irrigation_control
-  - platform: template
-    name: "Manual Cycle Cancel"
-    id: manual_irrigation_cancel
-    icon: "mdi:cancel"
-    restore_mode: ALWAYS_OFF
-    turn_on_action:
-      - lambda: |-
-          id(manual_irrigation_active) = false;
-          ESP_LOGI("manual", "Manual irrigation cancelled.");
-      - switch.turn_off: irrigation_valve_sw1
-      - switch.turn_off: irrigation_valve_sw2
-      - switch.turn_off: irrigation_valve_sw3
-      - switch.turn_off: irrigation_pump_sw
-    web_server:
-      sorting_group_id: irrigation_control
-  - platform: template
     name: "Cancel Scheduled Cycle"
     id: cancel_scheduled_cycle
     icon: "mdi:calendar-remove"
@@ -459,7 +412,6 @@ switch:
       - switch.turn_off: irrigation_valve_sw1
       - switch.turn_off: irrigation_valve_sw2
       - switch.turn_off: irrigation_valve_sw3
-      - switch.turn_off: irrigation_pump_sw
   - platform: template
     name: "Pause Irrigation"
     id: pause_irrigation
@@ -472,7 +424,6 @@ switch:
       - switch.turn_off: irrigation_valve_sw1
       - switch.turn_off: irrigation_valve_sw2
       - switch.turn_off: irrigation_valve_sw3
-      - switch.turn_off: irrigation_pump_sw
     web_server:
       sorting_group_id: irrigation_control
   - platform: template
@@ -490,6 +441,44 @@ switch:
   - platform: restart
     icon: mdi:reload-alert
     name: "Restart" # Manual restart switch
+
+button:
+  - platform: template
+    name: "Start Manual Cycle"
+    id: irrigation_manual_cycle_btn
+    icon: "mdi:play-circle"
+    on_press:
+      - lambda: |-
+          id(manual_irrigation_active) = true;
+      - script.execute: irrigation_script3
+  - platform: template
+    name: "Cancel Manual Cycle"
+    id: manual_irrigation_cancel_btn
+    icon: "mdi:cancel"
+    on_press:
+      - lambda: |-
+          id(manual_irrigation_active) = false;
+          ESP_LOGI("manual", "Manual irrigation cancelled.");
+      - switch.turn_off: irrigation_valve_sw1
+      - switch.turn_off: irrigation_valve_sw2
+      - switch.turn_off: irrigation_valve_sw3
+  - platform: template
+    name: "Reset Water Usage Lifetime"
+    id: reset_lifetime_usage
+    icon: "mdi:play-circle"
+    on_press:
+      then:
+        - lambda: |-
+            id(total_gallons_used) = 0.0;
+  - platform: template
+    name: "Reset Today's Water Usage"
+    id: reset_daily_usage
+    icon: "mdi:play-circle"
+    on_press:
+      then:
+        - lambda: |-
+            id(daily_gallons_used) = 0.0;
+        - component.update: water_today_gallons
 
 datetime:
   - platform: template
@@ -528,17 +517,6 @@ sensor:
     name: "Uptime"
     id: uptime_s
     update_interval: 5s
-  - platform: internal_temperature
-    name: "Internal Temperature"
-    id: internal_temperature_f
-    unit_of_measurement: "°F"
-    icon: "mdi:temperature-fahrenheit"
-    accuracy_decimals: 0
-    device_class: temperature
-    state_class: measurement
-    filters:
-      - lambda: return x * (9.0/5.0) + 32.0;
-      - filter_out: nan
   - platform: template
     name: "Active Zone Time Remaining"
     id: active_zone_time_remaining_sensor
@@ -551,22 +529,70 @@ sensor:
     icon: "mdi:clock-outline"
     web_server:
       sorting_group_id: irrigation_status
+  - platform: pulse_meter
+    pin: GPIO4
+    name: "Water Flow Rate"
+    id: water_flow_rate
+    unit_of_measurement: "gal/min"
+    timeout: 10s
+    accuracy_decimals: 2
+    total:
+      name: "Total Gallons Used"
+      id: water_total_gallons
+      icon: "mdi:waves"
+      unit_of_measurement: "gal"
+      accuracy_decimals: 2
+      device_class: water
+      state_class: total_increasing
+      web_server:
+        sorting_group_id: irrigation_usage
+    filters:
+      - multiply: 0.1056688  # For SEN0550: (60 / 150) * 0.264172
+    # - multiply: 2.113376  # For SEN0217: (60 / 7.5) * 0.264172
+    web_server:
+      sorting_group_id: irrigation_usage
+  - platform: template
+    name: "Total Gallons Today"
+    id: water_today_gallons
+    icon: "mdi:waves"
+    unit_of_measurement: "gal"
+    accuracy_decimals: 2
+    update_interval: 60s
+    lambda: |-
+      return id(daily_gallons_used);
+    web_server:
+      sorting_group_id: irrigation_usage
 
 binary_sensor:
   - platform: template
     id: irrigation_running
+    icon: "mdi:pulse"
     name: "Irrigation Running"
     lambda: |-
-      return id(irrigation_pump_sw).state ||
-             id(irrigation_valve_sw1).state ||
+      return id(irrigation_valve_sw1).state ||
              id(irrigation_valve_sw2).state ||
              id(irrigation_valve_sw3).state;
   - platform: status
     name: "Connection Status"
     id: connection_status
     icon: "mdi:connection"
+  - platform: template
+    name: "Flow Active"
+    id: flow_active
+    icon: "mdi:pulse"
+    lambda: |-
+      return id(water_flow_rate).state > 0.1;
+    device_class: running
+    web_server:
+      sorting_group_id: irrigation_status
 
 text_sensor:
+  - platform: homeassistant
+    name: "Weather Condition"
+    entity_id: weather.home
+    id: weather_condition
+    web_server:
+      sorting_group_id: irrigation_status
   - platform: template
     name: "Irrigation Daily Summary"
     id: irrigation_daily_summary
@@ -639,6 +665,17 @@ text_sensor:
         result += "\n";
       }
 
+      // Append water usage summary
+      char water_buf[32];
+      snprintf(water_buf, sizeof(water_buf), "Total Gallons Today: %.1f gal", id(daily_gallons_used));
+      result += water_buf;
+      result += "\n";
+
+      char total_buf[32];
+      snprintf(total_buf, sizeof(total_buf), "Total Gallons Used: %.1f gal", id(total_gallons_used));
+      result += total_buf;
+      result += "\n";
+
       // Append system health
       bool online = id(connection_status).state;
       uint32_t seconds = (uint32_t)id(uptime_s).state;
@@ -689,7 +726,7 @@ text_sensor:
         return std::string(buffer);
       }
       return result;
-    update_interval: 1s
+    update_interval: 30s
     web_server:
       sorting_group_id: irrigation_status
   - platform: template
@@ -721,7 +758,7 @@ text_sensor:
         return std::string(buffer);
       }
       return std::string("No Active Schedules");
-    update_interval: 1s
+    update_interval: 30s
     web_server:
       sorting_group_id: irrigation_status
   - platform: template
@@ -811,6 +848,9 @@ text_sensor:
     ssid:
       name: "Connected SSID"
       icon: "mdi:wifi"
+  - platform: version
+    name: "ESPHome Version"
+    hide_timestamp: true
 
 script:
   - id: irrigation_script1
@@ -833,7 +873,6 @@ script:
           ESP_LOGI("schedule", "Schedule skipped — disabled for today.");
           return;
         }
-
         int hour = id(sntp_time).now().hour;
         int minute = id(sntp_time).now().minute;
         if ((hour == id(irrigation_s1t).hour && minute == id(irrigation_s1t).minute && id(irrigation_schedule1_enabled).state && !id(irrigation_raindelay_24h_enabled).state && !id(irrigation_raindelay_48h_enabled).state)
@@ -852,7 +891,6 @@ script:
             id(scheduled_irrigation_active) = false;
             ESP_LOGI("manual", "Starting manual full-cycle");
           }
-      - switch.turn_on: irrigation_pump_sw
       - script.execute: manual_zone1
   - id: resume_irrigation_logic
     then:
@@ -873,7 +911,6 @@ script:
               id(irrigation_valve_sw3).turn_on();
             }
           }
-      - switch.turn_on: irrigation_pump_sw
   - id: manual_zone1
     then:
       - lambda: |-
@@ -912,7 +949,6 @@ script:
       - switch.turn_on: irrigation_valve_sw3
       - delay: !lambda "return (uint32_t)(id(zone_3_run_duration).state * 60000);"
       - switch.turn_off: irrigation_valve_sw3
-      - switch.turn_off: irrigation_pump_sw
       - lambda: |-
           id(active_zone_time_remaining) = 0;
           id(manual_irrigation_active) = false;
@@ -950,8 +986,7 @@ interval:
       - binary_sensor.template.publish:
           id: irrigation_running
           state: !lambda |-
-            return id(irrigation_pump_sw).state ||
-                   id(irrigation_valve_sw1).state ||
+            return id(irrigation_valve_sw1).state ||
                    id(irrigation_valve_sw2).state ||
                    id(irrigation_valve_sw3).state;
   - interval: 1s
@@ -961,4 +996,14 @@ interval:
             lambda: 'return id(active_zone_time_remaining) > 0 && !id(irrigation_paused);'
           then:
             - lambda: 'id(active_zone_time_remaining)--;'
+  - interval: 60s
+    then:
+      - lambda: |-
+          float lifetime = id(water_total_gallons).state;
+          float delta = lifetime - id(total_gallons_used);
+          if (delta > 0) {
+            id(daily_gallons_used) += delta;
+            id(total_gallons_used) = lifetime;
+          }
+      - component.update: water_today_gallons
 

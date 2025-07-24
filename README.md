@@ -1,45 +1,36 @@
-# Irrigation Controller
+# Irrigation Controller (v1.4.2)
 
-ESPHome-based 3-zone irrigation controller with schedule automation, rain delay, manual cycle control, and a local web UI for configuration and monitoring.
+**Author:** John Camm  
+**Board:** LilyGO T-Relay / ESP32 (esp32dev)  
+**Firmware:** ESPHome 2025.7.2  
 
-## 🌿 Features
+## Overview
 
-- 🚿 **3 Independent Zones** with runtime-adjustable durations
-- 📅 **Daily Scheduling** with up to 3 start times per day
-- ✅ **Per-Day Enable Switches**
-- 🌧️ **Rain Delay** options (24h / 48h) with auto-reset
-- 🔘 **Manual Cycle Trigger**
-- ⏱️ **Real-Time Countdown** for active zone
-- 🔄 **Dynamic UI Status** including active zone highlighting and time remaining
-- 📋 **Irrigation Summary** text sensor
-- 🌐 **Web Interface** with grouped sections and icons
-- ⚙️ **System Monitoring:** temperature, uptime, state
-- 🔁 **Cancel and Pause/Resume Cycle** controls
+An ESPHome-powered irrigation controller with:
+- 3 irrigation zones (independent runtime + day scheduling)
+- Manual + scheduled cycle control
+- Seasonal adjustment scaling
+- Real-time countdown & mode reporting
+- Pulse-based water usage tracking (flow rate, daily, total)
+- Rain delay support (manual + OpenWeatherMap forecast)
 
-## 🧠 Hardware
+## Key Features
 
-- **Board**: LilyGO T-Relay (ESP32)
-- **Power**: 5V DC
-- **Relays**: 3 onboard (Zone 1–3)
+- 🌧️ Forecast-based Rain Delay via OWM
+- 🕒 Multi-time Daily Schedule per Zone
+- 💧 Water Flow Metering (gallons/min, daily, lifetime)
+- 📊 Daily Irrigation Summary Text Sensor
+- 🟡 Manual Cycle Controls + Pause/Resume
+- 📡 Web + OTA + Home Assistant Integration
 
-## 🚀 Getting Started
+## Setup
 
-1. Flash the board using ESPHome CLI:
-   ```bash
-   esphome run irrigation-controller.yaml
-   ```
-2. Connect to Wi-Fi and open the web UI.
-3. Configure zone durations, schedule times, and enable days.
+1. Flash `irrigation.yaml` to LilyGO T-Relay board.
+2. Ensure OpenWeatherMap integration is available in Home Assistant.
+3. Install `rain_forecast_openweathermap.yaml` package.
+4. Calibrate flow sensor (pulses/gal) as needed.
+5. Optional: Add Lovelace dashboard cards for summary and water graphing.
 
-## 📦 Files
+## Version History
 
-- `irrigation-controller.yaml` – Main configuration
-- `CHANGELOG.md` – Version history
-- `.gitignore` – Ignore generated files
-
-## 📜 License
-
-MIT License
-
----
-Maintained by **John Camm**
+See `CHANGELOG.md` for details.
