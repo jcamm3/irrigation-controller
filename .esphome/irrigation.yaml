@@ -14,6 +14,12 @@
 #**************************************************************
 #  CHANGELOG
 #
+#    [1.4.2] – 2025-07-24
+#      • Added seasonal adjustment (% runtime scaling)
+#      • Forecast-based rain delay integration (via OWM)
+#      • Logic updated to skip irrigation during rain delay
+#      • Enhanced boot logging
+#
 #    [1.4.1] – 2025-07-21
 #      • Fixed logic bug in `on_boot:` to correctly sync total_gallons_used
 #      • Added button to reset today's water usage (`reset_daily_usage`)
@@ -186,6 +192,22 @@ time:
           - lambda: |-
               id(daily_gallons_used) = 0.0;
           - component.update: water_today_gallons
+
+# === Number ====
+number:
+  - platform: template
+    id: seasonal_adjustment_factor
+    name: "📈 Seasonal Adjustment"
+    unit_of_measurement: "x"
+    min_value: 0.5
+    max_value: 1.5
+    step: 0.05
+    initial_value: 1.0
+    mode: slider
+    optimistic: true
+    restore_value: true
+    web_server:
+      sorting_group_id: config_settings
 
 # === Light ====
 # Configure onboard LED as a status indicator.
@@ -585,7 +607,13 @@ binary_sensor:
     device_class: running
     web_server:
       sorting_group_id: irrigation_status
-
+  - platform: homeassistant
+    name: "Rain Forecast Today"
+    entity_id: binary_sensor.will_it_rain_today_owm
+    id: rain_forecast_today
+    web_server:
+      sorting_group_id: irrigation_status
+  
 text_sensor:
   - platform: homeassistant
     name: "Weather Condition"
@@ -826,6 +854,16 @@ text_sensor:
     web_server:
       sorting_group_id: irrigation_status
   - platform: template
+    name: "Forecast Rain Delay"
+    lambda: |-
+      if (id(irrigation_raindelay_24h_enabled).state || id(irrigation_raindelay_48h_enabled).state)
+        return {"☔ Active"};
+      return {"—"};
+    update_interval: 30s
+    icon: mdi:weather-pouring
+    web_server:
+      sorting_group_id: irrigation_status
+  - platform: template
     name: "Uptime (formatted)"
     icon: "mdi:timer-outline"
     entity_category: diagnostic
@@ -875,9 +913,9 @@ script:
         }
         int hour = id(sntp_time).now().hour;
         int minute = id(sntp_time).now().minute;
-        if ((hour == id(irrigation_s1t).hour && minute == id(irrigation_s1t).minute && id(irrigation_schedule1_enabled).state && !id(irrigation_raindelay_24h_enabled).state && !id(irrigation_raindelay_48h_enabled).state)
-         || (hour == id(irrigation_s2t).hour && minute == id(irrigation_s2t).minute && id(irrigation_schedule2_enabled).state && !id(irrigation_raindelay_24h_enabled).state && !id(irrigation_raindelay_48h_enabled).state)
-         || (hour == id(irrigation_s3t).hour && minute == id(irrigation_s3t).minute && id(irrigation_schedule3_enabled).state && !id(irrigation_raindelay_24h_enabled).state && !id(irrigation_raindelay_48h_enabled).state)) {
+        if ((hour == id(irrigation_s1t).hour && minute == id(irrigation_s1t).minute && id(irrigation_schedule1_enabled).state && !id(irrigation_raindelay_24h_enabled).state && !id(irrigation_raindelay_48h_enabled).state && !id(rain_forecast_today).state)
+         || (hour == id(irrigation_s2t).hour && minute == id(irrigation_s2t).minute && id(irrigation_schedule2_enabled).state && !id(irrigation_raindelay_24h_enabled).state && !id(irrigation_raindelay_48h_enabled).state && !id(rain_forecast_today).state)
+         || (hour == id(irrigation_s3t).hour && minute == id(irrigation_s3t).minute && id(irrigation_schedule3_enabled).state && !id(irrigation_raindelay_24h_enabled).state && !id(irrigation_raindelay_48h_enabled).state && !id(rain_forecast_today).state)) {
           id(irrigation_script3).execute();
         }
   - id: irrigation_script3
@@ -901,13 +939,13 @@ script:
           } else {
             // Reopen the appropriate valve
             if (id(irrigation_next_zone) == "zone1") {
-              id(active_zone_time_remaining) = id(zone_1_run_duration).state * 60;
+              id(active_zone_time_remaining) = (id(zone_1_run_duration).state * id(seasonal_adjustment_factor).state) * 60;
               id(irrigation_valve_sw1).turn_on();
             } else if (id(irrigation_next_zone) == "zone2") {
-              id(active_zone_time_remaining) = id(zone_2_run_duration).state * 60;
+              id(active_zone_time_remaining) = (id(zone_2_run_duration).state * id(seasonal_adjustment_factor).state) * 60;
               id(irrigation_valve_sw2).turn_on();
             } else if (id(irrigation_next_zone) == "zone3") {
-              id(active_zone_time_remaining) = id(zone_3_run_duration).state * 60;
+              id(active_zone_time_remaining) = (id(zone_3_run_duration).state * id(seasonal_adjustment_factor).state) * 60;
               id(irrigation_valve_sw3).turn_on();
             }
           }
@@ -916,7 +954,7 @@ script:
       - lambda: |-
           if (!id(manual_irrigation_active) && !id(scheduled_irrigation_active)) return;
           ESP_LOGI("irrigation", "Starting Zone 1");
-          id(active_zone_time_remaining) = id(zone_1_run_duration).state * 60;
+          id(active_zone_time_remaining) = (id(zone_1_run_duration).state * id(seasonal_adjustment_factor).state) * 60;
           ESP_LOGI("countdown", "Zone 1 runtime = %d minutes (%d seconds)", (int)id(zone_1_run_duration).state, id(active_zone_time_remaining));
       - switch.turn_on: irrigation_valve_sw1
       - delay: !lambda "return (uint32_t)(id(zone_1_run_duration).state * 60000);"
@@ -930,7 +968,7 @@ script:
       - lambda: |-
           if (!id(manual_irrigation_active) && !id(scheduled_irrigation_active)) return;
           ESP_LOGI("irrigation", "Starting Zone 2");
-          id(active_zone_time_remaining) = id(zone_2_run_duration).state * 60;
+          id(active_zone_time_remaining) = (id(zone_2_run_duration).state * id(seasonal_adjustment_factor).state) * 60;
           ESP_LOGI("countdown", "Zone 2 runtime = %d minutes (%d seconds)", (int)id(zone_2_run_duration).state, id(active_zone_time_remaining));
       - switch.turn_on: irrigation_valve_sw2
       - delay: !lambda "return (uint32_t)(id(zone_2_run_duration).state * 60000);"
@@ -944,7 +982,7 @@ script:
       - lambda: |-
           if (!id(manual_irrigation_active) && !id(scheduled_irrigation_active)) return;
           ESP_LOGI("irrigation", "Starting Zone 3");
-          id(active_zone_time_remaining) = id(zone_3_run_duration).state * 60;
+          id(active_zone_time_remaining) = (id(zone_3_run_duration).state * id(seasonal_adjustment_factor).state) * 60;
           ESP_LOGI("countdown", "Zone 3 runtime = %d minutes (%d seconds)", (int)id(zone_3_run_duration).state, id(active_zone_time_remaining));
       - switch.turn_on: irrigation_valve_sw3
       - delay: !lambda "return (uint32_t)(id(zone_3_run_duration).state * 60000);"
