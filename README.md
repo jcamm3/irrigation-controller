@@ -1,4 +1,4 @@
-# Irrigation Controller (v1.4.2)
+# Irrigation Controller
 
 **Author:** John Camm  
 **Board:** LilyGO T-Relay / ESP32 (esp32dev)  
