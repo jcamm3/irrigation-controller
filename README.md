@@ -1,9 +1,5 @@
 # Irrigation Controller
 
-**Author:** John Camm  
-**Board:** LilyGO T-Relay / ESP32 (esp32dev)  
-**Firmware:** ESPHome 2025.7.2  
-
 ## Overview
 
 An ESPHome-powered irrigation controller with:
